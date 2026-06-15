@@ -120,9 +120,9 @@ bias_init = nn.initializers.zeros
 
 
 def identity_kernel_init(key, shape, dtype=jnp.float32):
-    """Identity + LeCun uniform init for square weight matrices, lecun_uniform for non-square."""
+    """Pure identity init for square weight matrices, LeCun uniform for non-square."""
     if shape[0] == shape[1]:
-        return jnp.eye(shape[0], dtype=dtype) + lecun_unfirom(key, shape, dtype)
+        return jnp.eye(shape[0], dtype=dtype)
     return lecun_unfirom(key, shape, dtype)
 
 
@@ -159,8 +159,7 @@ def residual_block(x, width, normalize, activation):
 
 
 def identity_block(x, width, normalize, activation):
-    """Plain 4-dense MLP block with identity-initialized square layers, no skip connection.
-    Mirrors IdentityPrior: hidden square weights start at I so the block is near-identity."""
+    identity = x
     x = nn.Dense(width, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
     x = activation(x)
     x = nn.Dense(width, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
@@ -169,6 +168,7 @@ def identity_block(x, width, normalize, activation):
     x = activation(x)
     x = nn.Dense(width, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
     x = activation(x)
+    x = x + identity
     return x
 
 
