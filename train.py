@@ -201,7 +201,8 @@ class SA_encoder(nn.Module):
         x = jnp.concatenate([s, a], axis=-1)
         #Initial layer
         x = nn.Dense(self.network_width, kernel_init=proj_init, bias_init=bias_init)(x)
-        x = normalize(x)
+        if not self.use_identity_prior:
+            x = normalize(x)
         x = activation(x)
         #Blocks (residual or identity-prior plain MLP)
         for i in range(self.network_depth // 4):
@@ -239,7 +240,8 @@ class G_encoder(nn.Module):
         x = g
         #Initial layer
         x = nn.Dense(self.network_width, kernel_init=proj_init, bias_init=bias_init)(x)
-        x = normalize(x)
+        if not self.use_identity_prior:
+            x = normalize(x)
         x = activation(x)
         #Blocks (residual or identity-prior plain MLP)
         for i in range(self.network_depth // 4):
@@ -279,7 +281,8 @@ class Actor(nn.Module):
 
         #Initial layer
         x = nn.Dense(self.network_width, kernel_init=proj_init, bias_init=bias_init)(x)
-        x = normalize(x)
+        if not self.use_identity_prior:
+            x = normalize(x)
         x = activation(x)
         #Blocks (residual or identity-prior plain MLP)
         for i in range(self.network_depth // 4):
