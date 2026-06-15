@@ -102,8 +102,6 @@ class Args:
     entropy_param: float = 0.5
     disable_entropy: int = 0
     use_relu: int = 0
-    sgd: int = 0
-    momentum: float = 0.9
     num_render: int = 10
     save_buffer: int = 0
     
@@ -597,17 +595,12 @@ def main(cfg: DictConfig):
 
 
     # Network setup
-    def make_optimizer(lr):
-        if args.sgd:
-            return optax.sgd(learning_rate=lr, momentum=args.momentum)
-        return optax.adam(learning_rate=lr)
-
     # Actor
     actor = Actor(action_size=action_size, network_width=args.actor_network_width, network_depth=args.actor_depth, skip_connections=args.actor_skip_connections, use_relu=args.use_relu, use_identity_prior=args.use_identity_prior)
     actor_state = TrainState.create(
         apply_fn=actor.apply,
         params=actor.init(actor_key, np.ones([1, obs_size])),
-        tx=make_optimizer(args.actor_lr)
+        tx=optax.adam(learning_rate=args.actor_lr)
     )
 
     # Critic
@@ -622,7 +615,7 @@ def main(cfg: DictConfig):
             "sa_encoder": sa_encoder_params,
             "g_encoder": g_encoder_params
             },
-        tx=make_optimizer(args.critic_lr),
+        tx=optax.adam(learning_rate=args.critic_lr),
     )
 
     # Entropy coefficient
@@ -631,7 +624,7 @@ def main(cfg: DictConfig):
     alpha_state = TrainState.create(
         apply_fn=None,
         params={"log_alpha": log_alpha},
-        tx=make_optimizer(args.alpha_lr),
+        tx=optax.adam(learning_rate=args.alpha_lr),
     )
     
     # Trainstate
