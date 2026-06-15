@@ -120,9 +120,9 @@ bias_init = nn.initializers.zeros
 
 
 def identity_kernel_init(key, shape, dtype=jnp.float32):
-    """Identity init for square weight matrices, lecun_uniform for non-square."""
+    """Identity + LeCun uniform init for square weight matrices, lecun_uniform for non-square."""
     if shape[0] == shape[1]:
-        return jnp.eye(shape[0], dtype=dtype)
+        return jnp.eye(shape[0], dtype=dtype) + lecun_unfirom(key, shape, dtype)
     return lecun_unfirom(key, shape, dtype)
 
 

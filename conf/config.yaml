@@ -48,7 +48,7 @@ critic_depth: 16
 actor_skip_connections: 4
 critic_skip_connections: 4
 use_identity_prior: 0
-identity_weight_decay: 5e-3
+identity_weight_decay: 5e-4
 
 # Training details
 num_episodes_per_env: 1
