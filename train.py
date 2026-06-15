@@ -127,17 +127,16 @@ def identity_kernel_init(key, shape, dtype=jnp.float32):
 
 
 def identity_reg_loss(params, weight_decay):
-    """L2 penalty toward I for square 2-D kernels, toward 0 for non-square kernels.
-    Mirrors the IdentityPrior: penalises ||W - I||^2 for hidden square layers."""
+    """Gaussian prior loss matching IdentityPrior: 0.5 * wd * ||θ - μ||^2 summed over all params.
+    Square 2-D kernels use μ=I; all other params (non-square kernels, biases, LN params) use μ=0."""
     total = jnp.zeros(())
     for leaf in jax.tree_util.tree_leaves(params):
-        if leaf.ndim == 2:
-            if leaf.shape[0] == leaf.shape[1]:
-                diff = leaf - jnp.eye(leaf.shape[0])
-                total = total + jnp.sum(diff ** 2)
-            else:
-                total = total + jnp.sum(leaf ** 2)
-    return weight_decay * total
+        if leaf.ndim == 2 and leaf.shape[0] == leaf.shape[1]:
+            diff = leaf - jnp.eye(leaf.shape[0])
+            total = total + jnp.sum(diff ** 2)
+        else:
+            total = total + jnp.sum(leaf ** 2)
+    return 0.5 * weight_decay * total
 
 
 def residual_block(x, width, normalize, activation):
@@ -836,12 +835,15 @@ def main(cfg: DictConfig):
             alpha = jnp.exp(alpha_params["log_alpha"])
             alpha_loss = alpha * jnp.mean(jax.lax.stop_gradient(-log_prob - target_entropy))
             return jnp.mean(alpha_loss)
-        
+
         (actorloss, log_prob), actor_grad = jax.value_and_grad(actor_loss, has_aux=True)(training_state.actor_state.params, training_state.critic_state.params, training_state.alpha_state.params['log_alpha'], transitions, key)
         new_actor_state = training_state.actor_state.apply_gradients(grads=actor_grad)
 
         alphaloss, alpha_grad = jax.value_and_grad(alpha_loss)(training_state.alpha_state.params, log_prob)
         new_alpha_state = training_state.alpha_state.apply_gradients(grads=alpha_grad)
+        new_alpha_state = new_alpha_state.replace(
+            params={"log_alpha": jnp.clip(new_alpha_state.params["log_alpha"], -10.0, 2.0)}
+        )
 
         training_state = training_state.replace(actor_state=new_actor_state, alpha_state=new_alpha_state)
 
