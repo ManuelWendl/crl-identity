@@ -1,6 +1,7 @@
 import os
 import jax
 import flax
+import dataclasses
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import time
@@ -322,7 +323,9 @@ def save_params(path: str, params: Any):
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
-    args = Args(**OmegaConf.to_container(cfg, resolve=True))
+    args_fields = {f.name for f in dataclasses.fields(Args)}
+    cfg_dict = {k: v for k, v in OmegaConf.to_container(cfg, resolve=True).items() if k in args_fields}
+    args = Args(**cfg_dict)
 
     # Print every arg
     print("Arguments:", flush=True)
