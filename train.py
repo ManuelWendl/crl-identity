@@ -158,7 +158,6 @@ def residual_block(x, width, normalize, activation):
 
 
 def identity_block(x, width, normalize, activation):
-    identity = x
     x = nn.Dense(width, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
     x = activation(x)
     x = nn.Dense(width, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
@@ -167,7 +166,6 @@ def identity_block(x, width, normalize, activation):
     x = activation(x)
     x = nn.Dense(width, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
     x = activation(x)
-    x = (x + identity)/2
     return x
 
 
