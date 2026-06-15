@@ -6,10 +6,6 @@ tasks_per_node: 1
 mem_per_cpu: 16384
 nodes: 1
 name: ${hydra.job.name}
-account: ls_krausea
-additional_parameters:
-  constraint: gpu80
-  gpus: "1"
 array_parallelism: 256
 max_num_timeout: 100
 setup:
