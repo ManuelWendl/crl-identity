@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - launcher: slurm
+  - override hydra/launcher: slurm
 
 # General
 exp_name: train
