@@ -48,7 +48,7 @@ critic_depth: 4
 actor_skip_connections: 0
 critic_skip_connections: 0
 use_identity_prior: 0
-identity_weight_decay: 1e-4
+identity_weight_decay: 5e-3
 
 # Training details
 num_episodes_per_env: 1
@@ -60,6 +60,8 @@ expl_actor: 1
 entropy_param: 0.5
 disable_entropy: 0
 use_relu: 0
+sgd: 1
+momentum: 0.9
 num_render: 10
 save_buffer: 0
 
