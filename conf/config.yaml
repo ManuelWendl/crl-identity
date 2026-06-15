@@ -1,0 +1,70 @@
+defaults:
+  - _self_
+  - launcher: slurm
+
+# General
+exp_name: train
+seed: 1000
+torch_deterministic: true
+cuda: true
+track: true
+wandb_project_name: scale-crl-identity
+wandb_entity: manuelwendl-eth-z-rich
+wandb_mode: online
+wandb_dir: .
+wandb_group: .
+capture_vis: true
+vis_length: 1000
+checkpoint: true
+
+# Environment
+env_id: humanoid
+episode_length: 1000
+eval_env_id: ""
+num_eval_envs: 128
+obs_dim: 0
+goal_start_idx: 0
+goal_end_idx: 0
+
+# Algorithm
+total_env_steps: 100000000
+num_epochs: 100
+num_envs: 512
+actor_lr: 3e-4
+critic_lr: 3e-4
+alpha_lr: 3e-4
+batch_size: 256
+gamma: 0.99
+logsumexp_penalty_coeff: 0.1
+max_replay_size: 10000
+min_replay_size: 1000
+unroll_length: 62
+
+# Network architecture
+critic_network_width: 256
+actor_network_width: 256
+actor_depth: 4
+critic_depth: 4
+actor_skip_connections: 0
+critic_skip_connections: 0
+use_identity_prior: 0
+identity_weight_decay: 1e-4
+
+# Training details
+num_episodes_per_env: 1
+training_steps_multiplier: 1
+use_all_batches: 0
+num_sgd_batches_per_training_step: 800
+eval_actor: 0
+expl_actor: 1
+entropy_param: 0.5
+disable_entropy: 0
+use_relu: 0
+num_render: 10
+save_buffer: 0
+
+# Runtime-computed (do not set manually)
+env_steps_per_actor_step: 0
+num_prefill_env_steps: 0
+num_prefill_actor_steps: 0
+num_training_steps_per_epoch: 0

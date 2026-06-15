@@ -188,3 +188,29 @@ uv run train.py --env_id "humanoid" --eval_env_id "humanoid" --num_epochs 100 --
     ```
 3. Save the file and rerun the training script. -->
 
+
+Baseline:
+
+
+python train.py \
+  --env_id humanoid \
+  --critic_network_width 256 \
+  --actor_network_width 256 \
+  --critic_depth 4 \
+  --actor_depth 4 \
+  --seed 1000 \
+  --use_identity_prior 0
+
+  
+Identity prior:
+
+
+python train.py \
+  --env_id humanoid \
+  --critic_network_width 256 \
+  --actor_network_width 256 \
+  --critic_depth 4 \
+  --actor_depth 4 \
+  --seed 1000 \
+  --use_identity_prior 1 \
+  --identity_weight_decay 1e-4

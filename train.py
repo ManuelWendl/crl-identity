@@ -1,7 +1,8 @@
 import os
 import jax
 import flax
-import tyro
+import hydra
+from omegaconf import DictConfig, OmegaConf
 import time
 import optax
 import wandb
@@ -11,6 +12,12 @@ import wandb_osh
 import numpy as np
 import flax.linen as nn
 import jax.numpy as jnp
+
+# brax 0.10.1 calls mjx.ncon() which was removed in mujoco 3.1.4+.
+# It is only used as a boolean guard; returning the geom count is correct.
+import mujoco.mjx as _mjx
+if not hasattr(_mjx, 'ncon'):
+    _mjx.ncon = lambda sys: sys.ngeom
 
 from brax import envs
 from etils import epath
@@ -31,9 +38,9 @@ class Args:
     torch_deterministic: bool = True
     cuda: bool = True
     track: bool = True
-    wandb_project_name: str = "clean_JaxGCRL_test"
-    wandb_entity: str = 'wang-kevin3290-princeton-university'
-    wandb_mode: str = 'offline'
+    wandb_project_name: str = "scale-crl-identity"
+    wandb_entity: str = 'manuelwendl-eth-z-rich'
+    wandb_mode: str = 'online'
     wandb_dir: str = '.'
     wandb_group: str = '.'
     capture_vis: bool = True
@@ -72,6 +79,8 @@ class Args:
     critic_depth: int = 4
     actor_skip_connections: int = 0 # 0 for no skip connections, >= 0 means the frequency of skip connections (every N layers)
     critic_skip_connections: int = 0 # 0 for no skip connections, >= 0 means the frequency of skip connections (every N layers)
+    use_identity_prior: int = 0  # 0=residual blocks, 1=identity-init MLP (no skip) + identity weight decay
+    identity_weight_decay: float = 1e-4  # L2 weight decay coefficient for identity prior
     
     num_episodes_per_env: int = 1 #recommended to keep at 1
     training_steps_multiplier: int = 1 #recommended to keep at 1
@@ -107,6 +116,29 @@ class Args:
 
 lecun_unfirom = variance_scaling(1/3, "fan_in", "uniform")
 bias_init = nn.initializers.zeros
+
+
+def identity_kernel_init(key, shape, dtype=jnp.float32):
+    """Identity init for square weight matrices, lecun_uniform for non-square."""
+    if shape[0] == shape[1]:
+        return jnp.eye(shape[0], dtype=dtype)
+    return lecun_unfirom(key, shape, dtype)
+
+
+def identity_reg_loss(params, weight_decay):
+    """L2 penalty toward I for square 2-D kernels, toward 0 for non-square kernels.
+    Mirrors the IdentityPrior: penalises ||W - I||^2 for hidden square layers."""
+    total = jnp.zeros(())
+    for leaf in jax.tree_util.tree_leaves(params):
+        if leaf.ndim == 2:
+            if leaf.shape[0] == leaf.shape[1]:
+                diff = leaf - jnp.eye(leaf.shape[0])
+                total = total + jnp.sum(diff ** 2)
+            else:
+                total = total + jnp.sum(leaf ** 2)
+    return weight_decay * total
+
+
 def residual_block(x, width, normalize, activation):
     identity = x
     x = nn.Dense(width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
@@ -124,38 +156,57 @@ def residual_block(x, width, normalize, activation):
     x = x + identity
     return x
 
+
+def identity_block(x, width, normalize, activation):
+    """Plain 4-dense MLP block with identity-initialized square layers, no skip connection.
+    Mirrors IdentityPrior: hidden square weights start at I so the block is near-identity."""
+    x = nn.Dense(width, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
+    x = activation(x)
+    x = nn.Dense(width, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
+    x = activation(x)
+    x = nn.Dense(width, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
+    x = activation(x)
+    x = nn.Dense(width, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
+    x = activation(x)
+    return x
+
+
 class SA_encoder(nn.Module):
     norm_type = "layer_norm"
     network_width: int = 1024
     network_depth: int = 4
     skip_connections: int = 0
     use_relu: int = 0
+    use_identity_prior: int = 0
     @nn.compact
     def __call__(self, s: jnp.ndarray, a: jnp.ndarray):
 
         lecun_unfirom = variance_scaling(1/3, "fan_in", "uniform")
         bias_init = nn.initializers.zeros
-        
+
         if self.norm_type == "layer_norm":
             normalize = lambda x: nn.LayerNorm()(x)
         else:
             normalize = lambda x: x
-        
+
         if self.use_relu:
             activation = nn.relu
         else:
             activation = nn.swish
-            
+
+        block_fn = identity_block if self.use_identity_prior else residual_block
+        proj_init = identity_kernel_init if self.use_identity_prior else lecun_unfirom
+
         x = jnp.concatenate([s, a], axis=-1)
         #Initial layer
-        x = nn.Dense(self.network_width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+        x = nn.Dense(self.network_width, kernel_init=proj_init, bias_init=bias_init)(x)
         x = normalize(x)
         x = activation(x)
-        #Residual blocks
+        #Blocks (residual or identity-prior plain MLP)
         for i in range(self.network_depth // 4):
-            x = residual_block(x, self.network_width, normalize, activation)
+            x = block_fn(x, self.network_width, normalize, activation)
         #Final layer
-        x = nn.Dense(64, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+        x = nn.Dense(64, kernel_init=proj_init, bias_init=bias_init)(x)
         return x
     
 class G_encoder(nn.Module):
@@ -164,6 +215,7 @@ class G_encoder(nn.Module):
     network_depth: int = 4
     skip_connections: int = 0
     use_relu: int = 0
+    use_identity_prior: int = 0
     @nn.compact
     def __call__(self, g: jnp.ndarray):
 
@@ -174,22 +226,25 @@ class G_encoder(nn.Module):
             normalize = lambda x: nn.LayerNorm()(x)
         else:
             normalize = lambda x: x
-        
+
         if self.use_relu:
             activation = nn.relu
         else:
             activation = nn.swish
-        
+
+        block_fn = identity_block if self.use_identity_prior else residual_block
+        proj_init = identity_kernel_init if self.use_identity_prior else lecun_unfirom
+
         x = g
         #Initial layer
-        x = nn.Dense(self.network_width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+        x = nn.Dense(self.network_width, kernel_init=proj_init, bias_init=bias_init)(x)
         x = normalize(x)
         x = activation(x)
-        #Residual blocks
+        #Blocks (residual or identity-prior plain MLP)
         for i in range(self.network_depth // 4):
-            x = residual_block(x, self.network_width, normalize, activation)
+            x = block_fn(x, self.network_width, normalize, activation)
         #Final layer
-        x = nn.Dense(64, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+        x = nn.Dense(64, kernel_init=proj_init, bias_init=bias_init)(x)
         return x
   
 class Actor(nn.Module):
@@ -199,6 +254,7 @@ class Actor(nn.Module):
     network_depth: int = 4
     skip_connections: int = 0
     use_relu: int = 0
+    use_identity_prior: int = 0
     LOG_STD_MAX = 2
     LOG_STD_MIN = -5
 
@@ -208,7 +264,7 @@ class Actor(nn.Module):
             normalize = lambda x: nn.LayerNorm()(x)
         else:
             normalize = lambda x: x
-            
+
         if self.use_relu:
             activation = nn.relu
         else:
@@ -216,18 +272,21 @@ class Actor(nn.Module):
 
         lecun_unfirom = variance_scaling(1/3, "fan_in", "uniform")
         bias_init = nn.initializers.zeros
-    
+
+        block_fn = identity_block if self.use_identity_prior else residual_block
+        proj_init = identity_kernel_init if self.use_identity_prior else lecun_unfirom
+
         #Initial layer
-        x = nn.Dense(self.network_width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+        x = nn.Dense(self.network_width, kernel_init=proj_init, bias_init=bias_init)(x)
         x = normalize(x)
         x = activation(x)
-        #Residual blocks
+        #Blocks (residual or identity-prior plain MLP)
         for i in range(self.network_depth // 4):
-            x = residual_block(x, self.network_width, normalize, activation)
+            x = block_fn(x, self.network_width, normalize, activation)
         #Final layer
-        mean = nn.Dense(self.action_size, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
-        log_std = nn.Dense(self.action_size, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
-        
+        mean = nn.Dense(self.action_size, kernel_init=proj_init, bias_init=bias_init)(x)
+        log_std = nn.Dense(self.action_size, kernel_init=proj_init, bias_init=bias_init)(x)
+
         log_std = nn.tanh(log_std)
         log_std = self.LOG_STD_MIN + 0.5 * (self.LOG_STD_MAX - self.LOG_STD_MIN) * (log_std + 1)  # From SpinUp / Denis Yarats
 
@@ -261,10 +320,10 @@ def save_params(path: str, params: Any):
     with epath.Path(path).open('wb') as fout:
         fout.write(pickle.dumps(params))
 
-if __name__ == "__main__":
+@hydra.main(version_base=None, config_path="conf", config_name="config")
+def main(cfg: DictConfig):
+    args = Args(**OmegaConf.to_container(cfg, resolve=True))
 
-    args = tyro.cli(Args)
-    
     # Print every arg
     print("Arguments:", flush=True)
     for arg, value in vars(args).items():
@@ -534,7 +593,7 @@ if __name__ == "__main__":
 
     # Network setup
     # Actor
-    actor = Actor(action_size=action_size, network_width=args.actor_network_width, network_depth=args.actor_depth, skip_connections=args.actor_skip_connections, use_relu=args.use_relu)
+    actor = Actor(action_size=action_size, network_width=args.actor_network_width, network_depth=args.actor_depth, skip_connections=args.actor_skip_connections, use_relu=args.use_relu, use_identity_prior=args.use_identity_prior)
     actor_state = TrainState.create(
         apply_fn=actor.apply,
         params=actor.init(actor_key, np.ones([1, obs_size])),
@@ -542,9 +601,9 @@ if __name__ == "__main__":
     )
 
     # Critic
-    sa_encoder = SA_encoder(network_width=args.critic_network_width, network_depth=args.critic_depth, skip_connections=args.critic_skip_connections, use_relu=args.use_relu)
+    sa_encoder = SA_encoder(network_width=args.critic_network_width, network_depth=args.critic_depth, skip_connections=args.critic_skip_connections, use_relu=args.use_relu, use_identity_prior=args.use_identity_prior)
     sa_encoder_params = sa_encoder.init(sa_key, np.ones([1, args.obs_dim]), np.ones([1, action_size]))
-    g_encoder = G_encoder(network_width=args.critic_network_width, network_depth=args.critic_depth, skip_connections=args.critic_skip_connections, use_relu=args.use_relu)
+    g_encoder = G_encoder(network_width=args.critic_network_width, network_depth=args.critic_depth, skip_connections=args.critic_skip_connections, use_relu=args.use_relu, use_identity_prior=args.use_identity_prior)
     g_encoder_params = g_encoder.init(g_key, np.ones([1, args.goal_end_idx - args.goal_start_idx]))
     
     critic_state = TrainState.create(
@@ -762,6 +821,9 @@ if __name__ == "__main__":
             else:
                 actor_loss = jnp.mean( jnp.exp(log_alpha) * log_prob - (qf_pi) )
 
+            if args.use_identity_prior:
+                actor_loss = actor_loss + identity_reg_loss(actor_params, args.identity_weight_decay)
+
             return actor_loss, log_prob
 
         def alpha_loss(alpha_params, log_prob):
@@ -810,8 +872,11 @@ if __name__ == "__main__":
             logsumexp = jax.nn.logsumexp(logits + 1e-6, axis=1)
             critic_loss += args.logsumexp_penalty_coeff * jnp.mean(logsumexp**2)
 
+            if args.use_identity_prior:
+                critic_loss = critic_loss + identity_reg_loss(critic_params, args.identity_weight_decay)
+
             I, correct, logits_pos, logits_neg = jnp.zeros(1), jnp.zeros(1), jnp.zeros(1), jnp.zeros(1)
-                
+
 
             return critic_loss, (logsumexp, I, correct, logits_pos, logits_neg)
             
@@ -1095,3 +1160,7 @@ if __name__ == "__main__":
                 print(f"Saved replay_buffer to {buffer_path}", flush=True)
             except Exception as e:
                 print(f"Error saving final replay buffer: {e}", flush=True)
+
+
+if __name__ == "__main__":
+    main()
