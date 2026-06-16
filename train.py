@@ -167,7 +167,7 @@ def identity_block(x, width, normalize, activation):
     x = activation(x)
     x = nn.Dense(width+1, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
     x = activation(x)
-    x = nn.Dense(width, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
+    x = nn.Dense(width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
     x = activation(x)
     x = x + identity
     return x
