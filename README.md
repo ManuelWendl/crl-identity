@@ -198,12 +198,4 @@ srun --ntasks=1 --cpus-per-task=1 --mem-per-cpu=8G --gpus=rtx_4090:1 python trai
 Identity prior:
 
 
-python train.py \
-  --env_id humanoid \
-  --critic_network_width 256 \
-  --actor_network_width 256 \
-  --critic_depth 4 \
-  --actor_depth 4 \
-  --seed 1000 \
-  --use_identity_prior 1 \
-  --identity_weight_decay 1e-4
+srun --ntasks=1 --cpus-per-task=1 --mem-per-cpu=8G --gpus=rtx_4090:1 python train.py ~hydra/launcher seed=0 use_relu=1 use_identity_prior=1

@@ -900,7 +900,7 @@ def main(cfg: DictConfig):
 
 
             return critic_loss, (logsumexp, I, correct, logits_pos, logits_neg)
-            
+
         (loss, (logsumexp, I, correct, logits_pos, logits_neg)), grad = jax.value_and_grad(critic_loss, has_aux=True)(training_state.critic_state.params, transitions, key)
         new_critic_state = training_state.critic_state.apply_gradients(grads=grad)
         training_state = training_state.replace(critic_state = new_critic_state)
