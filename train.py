@@ -82,6 +82,8 @@ class Args:
     critic_skip_connections: int = 0 # 0 for no skip connections, >= 0 means the frequency of skip connections (every N layers)
     use_identity_prior: int = 0  # 0=residual blocks, 1=identity-init MLP (no skip) + identity weight decay
     identity_weight_decay: float = 1e-4  # L2 weight decay coefficient for identity prior
+    sgd: bool = False  # use SGD + cosine annealing (as in IdentityPrior) instead of Adam
+    sgd_momentum: float = 0.9
     
     num_episodes_per_env: int = 1 #recommended to keep at 1
     training_steps_multiplier: int = 1 #recommended to keep at 1
@@ -202,7 +204,7 @@ class SA_encoder(nn.Module):
             x = normalize(x)
         x = activation(x)
         #Blocks (residual or identity-prior plain MLP)
-        for i in range(self.network_depth // 4):
+        for _ in range(self.network_depth // 4):
             x = block_fn(x, self.network_width, normalize, activation)
         #Final layer
         x = nn.Dense(64, kernel_init=proj_init, bias_init=bias_init)(x)
@@ -241,7 +243,7 @@ class G_encoder(nn.Module):
             x = normalize(x)
         x = activation(x)
         #Blocks (residual or identity-prior plain MLP)
-        for i in range(self.network_depth // 4):
+        for _ in range(self.network_depth // 4):
             x = block_fn(x, self.network_width, normalize, activation)
         #Final layer
         x = nn.Dense(64, kernel_init=proj_init, bias_init=bias_init)(x)
@@ -282,7 +284,7 @@ class Actor(nn.Module):
             x = normalize(x)
         x = activation(x)
         #Blocks (residual or identity-prior plain MLP)
-        for i in range(self.network_depth // 4):
+        for _ in range(self.network_depth // 4):
             x = block_fn(x, self.network_width, normalize, activation)
         #Final layer
         mean = nn.Dense(self.action_size, kernel_init=proj_init, bias_init=bias_init)(x)
@@ -344,6 +346,9 @@ def main(cfg: DictConfig):
 
     args.num_training_steps_per_epoch = (args.total_env_steps - args.num_prefill_env_steps) // (args.num_epochs * args.env_steps_per_actor_step)
     print(f"num_training_steps_per_epoch: {args.num_training_steps_per_epoch}", flush=True)
+
+    total_sgd_steps = int(args.num_epochs * args.num_training_steps_per_epoch * args.training_steps_multiplier * args.num_sgd_batches_per_training_step)
+    print(f"total_sgd_steps: {total_sgd_steps}", flush=True)
     
     run_name = f"{args.env_id}{'_' + args.eval_env_id if args.eval_env_id else ''}_{args.batch_size}_{args.total_env_steps}_nenvs:{args.num_envs}_criticwidth:{args.critic_network_width}_actorwidth:{args.actor_network_width}_criticdepth:{args.critic_depth}_actordepth:{args.actor_depth}_actorskip:{args.actor_skip_connections}_criticskip:{args.critic_skip_connections}_{args.seed}"
     print(f"run_name: {run_name}", flush=True)
@@ -597,10 +602,15 @@ def main(cfg: DictConfig):
     # Network setup
     # Actor
     actor = Actor(action_size=action_size, network_width=args.actor_network_width, network_depth=args.actor_depth, skip_connections=args.actor_skip_connections, use_relu=args.use_relu, use_identity_prior=args.use_identity_prior)
+    if args.sgd:
+        actor_schedule = optax.cosine_decay_schedule(init_value=args.actor_lr, decay_steps=total_sgd_steps)
+        actor_tx = optax.sgd(learning_rate=actor_schedule, momentum=args.sgd_momentum)
+    else:
+        actor_tx = optax.adam(learning_rate=args.actor_lr)
     actor_state = TrainState.create(
         apply_fn=actor.apply,
         params=actor.init(actor_key, np.ones([1, obs_size])),
-        tx=optax.adam(learning_rate=args.actor_lr)
+        tx=actor_tx,
     )
 
     # Critic
@@ -609,13 +619,18 @@ def main(cfg: DictConfig):
     g_encoder = G_encoder(network_width=args.critic_network_width, network_depth=args.critic_depth, skip_connections=args.critic_skip_connections, use_relu=args.use_relu, use_identity_prior=args.use_identity_prior)
     g_encoder_params = g_encoder.init(g_key, np.ones([1, args.goal_end_idx - args.goal_start_idx]))
 
+    if args.sgd:
+        critic_schedule = optax.cosine_decay_schedule(init_value=args.critic_lr, decay_steps=total_sgd_steps)
+        critic_tx = optax.sgd(learning_rate=critic_schedule, momentum=args.sgd_momentum)
+    else:
+        critic_tx = optax.adam(learning_rate=args.critic_lr)
     critic_state = TrainState.create(
         apply_fn=None,
         params={
             "sa_encoder": sa_encoder_params,
             "g_encoder": g_encoder_params
             },
-        tx=optax.adam(learning_rate=args.critic_lr),
+        tx=critic_tx,
     )
 
     # Entropy coefficient
