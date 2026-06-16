@@ -377,7 +377,7 @@ def main(cfg: DictConfig):
     if args.checkpoint:
         from pathlib import Path
         from datetime import datetime
-        short_run_name = f"runs/{args.env_id}_{args.seed}_{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        short_run_name = f"runs/{run_name}_{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
         save_path = Path(args.wandb_dir) / Path(short_run_name)
         os.mkdir(path=save_path)
 

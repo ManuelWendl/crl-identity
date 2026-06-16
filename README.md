@@ -192,14 +192,7 @@ uv run train.py --env_id "humanoid" --eval_env_id "humanoid" --num_epochs 100 --
 Baseline:
 
 
-python train.py \
-  --env_id humanoid \
-  --critic_network_width 256 \
-  --actor_network_width 256 \
-  --critic_depth 4 \
-  --actor_depth 4 \
-  --seed 1000 \
-  --use_identity_prior 0
+srun --ntasks=1 --cpus-per-task=1 --mem-per-cpu=8G --gpus=rtx_4090:1 python train.py ~hydra/launcher seed=0 use_relu=1 use_identity_prior=0 
 
   
 Identity prior:
