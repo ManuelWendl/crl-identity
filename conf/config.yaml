@@ -43,10 +43,10 @@ unroll_length: 62
 # Network architecture
 critic_network_width: 256
 actor_network_width: 256
-actor_depth: 16
-critic_depth: 16
-actor_skip_connections: 4
-critic_skip_connections: 4
+actor_depth: 10
+critic_depth: 10
+actor_skip_connections: 0
+critic_skip_connections: 0
 use_identity_prior: 0
 identity_weight_decay: 5e-4
 sgd: false

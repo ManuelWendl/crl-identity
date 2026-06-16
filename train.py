@@ -159,17 +159,27 @@ def residual_block(x, width, normalize, activation):
     return x
 
 
-def identity_block(x, width, normalize, activation):
-    identity = x
-    x = nn.Dense(width+1, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
-    x = activation(x)
-    x = nn.Dense(width+1, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
-    x = activation(x)
-    x = nn.Dense(width+1, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
+def dense_block(x, width, normalize, activation):
+    x = nn.Dense(width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
     x = activation(x)
     x = nn.Dense(width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
-    x = normalize(x)
-    x = x + identity
+    x = activation(x)
+    x = nn.Dense(width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+    x = activation(x)
+    x = nn.Dense(width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+    x = activation(x)
+    return x
+
+
+def identity_block(x, width, normalize, activation):
+    x = nn.Dense(width, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
+    x = activation(x)
+    x = nn.Dense(width, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
+    x = activation(x)
+    x = nn.Dense(width, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
+    x = activation(x)
+    x = nn.Dense(width, kernel_init=identity_kernel_init, bias_init=bias_init)(x)
+    x = activation(x)
     return x
 
 
@@ -196,7 +206,12 @@ class SA_encoder(nn.Module):
         else:
             activation = nn.swish
 
-        block_fn = identity_block if self.use_identity_prior else residual_block
+        if self.use_identity_prior:
+            block_fn = identity_block
+        elif self.skip_connections > 0:
+            block_fn = residual_block
+        else:
+            block_fn = dense_block
         proj_init = identity_kernel_init if self.use_identity_prior else lecun_unfirom
 
         x = jnp.concatenate([s, a], axis=-1)
@@ -235,7 +250,12 @@ class G_encoder(nn.Module):
         else:
             activation = nn.swish
 
-        block_fn = identity_block if self.use_identity_prior else residual_block
+        if self.use_identity_prior:
+            block_fn = identity_block
+        elif self.skip_connections > 0:
+            block_fn = residual_block
+        else:
+            block_fn = dense_block
         proj_init = identity_kernel_init if self.use_identity_prior else lecun_unfirom
 
         x = g
@@ -277,7 +297,12 @@ class Actor(nn.Module):
         lecun_unfirom = variance_scaling(1/3, "fan_in", "uniform")
         bias_init = nn.initializers.zeros
 
-        block_fn = identity_block if self.use_identity_prior else residual_block
+        if self.use_identity_prior:
+            block_fn = identity_block
+        elif self.skip_connections > 0:
+            block_fn = residual_block
+        else:
+            block_fn = dense_block
         proj_init = identity_kernel_init if self.use_identity_prior else lecun_unfirom
 
         #Initial layer
