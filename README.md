@@ -192,10 +192,10 @@ uv run train.py --env_id "humanoid" --eval_env_id "humanoid" --num_epochs 100 --
 Baseline:
 
 
-srun --ntasks=1 --cpus-per-task=1 --mem-per-cpu=8G --gpus=rtx_4090:1 python train.py ~hydra/launcher seed=0 use_relu=1 use_identity_prior=0 
+srun --ntasks=1 --cpus-per-task=1 --mem-per-cpu=8G --time=3:59:00 --gpus=rtx_4090:1 python train.py ~hydra/launcher seed=0 use_identity_prior=0 use_relu=1 
 
   
 Identity prior:
 
 
-srun --ntasks=1 --cpus-per-task=1 --mem-per-cpu=8G --gpus=rtx_4090:1 python train.py ~hydra/launcher seed=0 use_relu=1 use_identity_prior=1
+srun --ntasks=1 --cpus-per-task=1 --mem-per-cpu=8G --time=3:59:00 --gpus=rtx_4090:1 python train.py ~hydra/launcher seed=0 use_identity_prior=1 use_relu=1
