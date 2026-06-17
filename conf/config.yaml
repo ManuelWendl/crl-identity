@@ -48,7 +48,7 @@ critic_depth: 8
 actor_skip_connections: 0
 critic_skip_connections: 0
 use_identity_prior: 0
-identity_weight_decay: 5e-4
+identity_weight_decay: 5e-5
 sgd: false
 sgd_momentum: 0.9
 
@@ -59,7 +59,7 @@ use_all_batches: 0
 num_sgd_batches_per_training_step: 800
 eval_actor: 0
 expl_actor: 1
-entropy_param: 0.5
+entropy_param: 1.0
 disable_entropy: 0
 use_relu: 0
 num_render: 10
