@@ -248,7 +248,6 @@ class SA_encoder(nn.Module):
 
         x = jnp.concatenate([s, a], axis=-1)
         #Initial layer
-        x = nn.normalize(x)
         x = nn.Dense(self.network_width, kernel_init=proj_init, bias_init=bias_init)(x)
         # if not self.use_identity_prior:
         #     x = normalize(x)
@@ -293,7 +292,6 @@ class G_encoder(nn.Module):
 
         x = g
         #Initial layer
-        x = nn.normalize(x)
         x = nn.Dense(self.network_width, kernel_init=proj_init, bias_init=bias_init)(x)
         # if not self.use_identity_prior:
         #     x = normalize(x)
@@ -340,7 +338,6 @@ class Actor(nn.Module):
         proj_init = identity_kernel_init if self.use_identity_prior else lecun_unfirom
 
         #Initial layer
-        x = normalize(x)
         x = nn.Dense(self.network_width, kernel_init=proj_init, bias_init=bias_init)(x)
         # if not self.use_identity_prior:
         #     x = normalize(x)
@@ -349,6 +346,7 @@ class Actor(nn.Module):
         for _ in range(self.network_depth // 4):
             x = block_fn(x, self.network_width, normalize, activation)
         #Final layer
+        x = normalize(x)
         mean = nn.Dense(self.action_size, kernel_init=proj_init, bias_init=bias_init)(x)
         log_std = nn.Dense(self.action_size, kernel_init=proj_init, bias_init=bias_init)(x)
 
