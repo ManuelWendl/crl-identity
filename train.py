@@ -141,6 +141,31 @@ def identity_reg_loss(params, weight_decay):
     return 0.5 * weight_decay * total
 
 
+def make_identity_mu(params):
+    """Prior-mean pytree for the identity prior: I for square 2-D kernels, 0 elsewhere."""
+    def _mu(leaf):
+        if leaf.ndim == 2 and leaf.shape[0] == leaf.shape[1]:
+            return jnp.eye(leaf.shape[0], dtype=leaf.dtype)
+        return jnp.zeros_like(leaf)
+    return jax.tree_util.tree_map(_mu, params)
+
+
+def add_identity_decayed_weights(weight_decay, mu):
+    """Decoupled (AdamW-style) weight decay toward mu, applied directly to the update so it
+    bypasses Adam's first/second moment estimators. Reproduces the identity prior's
+    wd * (θ - μ) pull without routing it through m / v."""
+    def init_fn(params):
+        del params
+        return optax.EmptyState()
+
+    def update_fn(updates, state, params):
+        updates = jax.tree_util.tree_map(
+            lambda u, p, m: u + weight_decay * (p - m), updates, params, mu)
+        return updates, state
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 def residual_block(x, width, normalize, activation):
     identity = x
     x = nn.Dense(width, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
@@ -629,14 +654,22 @@ def main(cfg: DictConfig):
     # Network setup
     # Actor
     actor = Actor(action_size=action_size, network_width=args.actor_network_width, network_depth=args.actor_depth, skip_connections=args.actor_skip_connections, use_relu=args.use_relu, use_identity_prior=args.use_identity_prior)
+    actor_params = actor.init(actor_key, np.ones([1, obs_size]))
     if args.sgd:
         actor_schedule = optax.cosine_decay_schedule(init_value=args.actor_lr, decay_steps=total_sgd_steps)
         actor_tx = optax.sgd(learning_rate=actor_schedule, momentum=args.sgd_momentum)
+    elif args.use_identity_prior:
+        # Decoupled (AdamW-style) identity prior: wd * (θ - μ) bypasses Adam's m / v.
+        actor_tx = optax.chain(
+            optax.scale_by_adam(),
+            add_identity_decayed_weights(args.identity_weight_decay, make_identity_mu(actor_params)),
+            optax.scale_by_learning_rate(args.actor_lr),
+        )
     else:
         actor_tx = optax.adam(learning_rate=args.actor_lr)
     actor_state = TrainState.create(
         apply_fn=actor.apply,
-        params=actor.init(actor_key, np.ones([1, obs_size])),
+        params=actor_params,
         tx=actor_tx,
     )
 
@@ -646,17 +679,25 @@ def main(cfg: DictConfig):
     g_encoder = G_encoder(network_width=args.critic_network_width, network_depth=args.critic_depth, skip_connections=args.critic_skip_connections, use_relu=args.use_relu, use_identity_prior=args.use_identity_prior)
     g_encoder_params = g_encoder.init(g_key, np.ones([1, args.goal_end_idx - args.goal_start_idx]))
 
+    critic_params = {
+        "sa_encoder": sa_encoder_params,
+        "g_encoder": g_encoder_params,
+    }
     if args.sgd:
         critic_schedule = optax.cosine_decay_schedule(init_value=args.critic_lr, decay_steps=total_sgd_steps)
         critic_tx = optax.sgd(learning_rate=critic_schedule, momentum=args.sgd_momentum)
+    elif args.use_identity_prior:
+        # Decoupled (AdamW-style) identity prior: wd * (θ - μ) bypasses Adam's m / v.
+        critic_tx = optax.chain(
+            optax.scale_by_adam(),
+            add_identity_decayed_weights(args.identity_weight_decay, make_identity_mu(critic_params)),
+            optax.scale_by_learning_rate(args.critic_lr),
+        )
     else:
         critic_tx = optax.adam(learning_rate=args.critic_lr)
     critic_state = TrainState.create(
         apply_fn=None,
-        params={
-            "sa_encoder": sa_encoder_params,
-            "g_encoder": g_encoder_params
-            },
+        params=critic_params,
         tx=critic_tx,
     )
 
@@ -866,7 +907,9 @@ def main(cfg: DictConfig):
             else:
                 actor_loss = jnp.mean( jnp.exp(log_alpha) * log_prob - (qf_pi) )
 
-            if args.use_identity_prior:
+            # SGD: prior is applied as a loss term. Adam: prior is applied as decoupled
+            # (AdamW-style) weight decay in the optimizer, so skip the loss term here.
+            if args.use_identity_prior and args.sgd:
                 actor_loss = actor_loss + identity_reg_loss(actor_params, args.identity_weight_decay)
 
             return actor_loss, log_prob
@@ -920,7 +963,9 @@ def main(cfg: DictConfig):
             logsumexp = jax.nn.logsumexp(logits + 1e-6, axis=1)
             critic_loss += args.logsumexp_penalty_coeff * jnp.mean(logsumexp**2)
 
-            if args.use_identity_prior:
+            # SGD: prior is applied as a loss term. Adam: prior is applied as decoupled
+            # (AdamW-style) weight decay in the optimizer, so skip the loss term here.
+            if args.use_identity_prior and args.sgd:
                 critic_loss = critic_loss + identity_reg_loss(critic_params, args.identity_weight_decay)
 
             I, correct, logits_pos, logits_neg = jnp.zeros(1), jnp.zeros(1), jnp.zeros(1), jnp.zeros(1)
