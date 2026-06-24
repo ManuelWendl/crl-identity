@@ -41,10 +41,10 @@ min_replay_size: 1000
 unroll_length: 62
 
 # Network architecture
-critic_network_width: 512
-actor_network_width: 512
-actor_depth: 16
-critic_depth: 16
+critic_network_width: 1024
+actor_network_width: 1024
+actor_depth: 8
+critic_depth: 8
 actor_skip_connections: 0
 critic_skip_connections: 0
 use_identity_prior: 0

@@ -129,11 +129,14 @@ def identity_kernel_init(key, shape, dtype=jnp.float32):
 
 
 def identity_reg_loss(params, weight_decay):
-    """Gaussian prior loss matching IdentityPrior: 0.5 * wd * ||θ - μ||^2 summed over all params.
-    Square 2-D kernels use μ=I; all other params (non-square kernels, biases, LN params) use μ=0."""
+    """Gaussian prior loss: 0.5 * wd * ||θ - μ||^2 summed over weight matrices only.
+    Square 2-D kernels use μ=I; non-square 2-D kernels use μ=0. 1-D params
+    (biases, LayerNorm scale/bias) are excluded from the prior entirely."""
     total = jnp.zeros(())
     for leaf in jax.tree_util.tree_leaves(params):
-        if leaf.ndim == 2 and leaf.shape[0] == leaf.shape[1]:
+        if leaf.ndim != 2:
+            continue  # biases / LayerNorm params: no prior
+        if leaf.shape[0] == leaf.shape[1]:
             diff = leaf - jnp.eye(leaf.shape[0])
             total = total + jnp.sum(diff ** 2)
         else:
@@ -153,14 +156,18 @@ def make_identity_mu(params):
 def add_identity_decayed_weights(weight_decay, mu):
     """Decoupled (AdamW-style) weight decay toward mu, applied directly to the update so it
     bypasses Adam's first/second moment estimators. Reproduces the identity prior's
-    wd * (θ - μ) pull without routing it through m / v."""
+    wd * (θ - μ) pull without routing it through m / v. Only 2-D weight matrices are
+    decayed; 1-D params (biases, LayerNorm scale/bias) are left untouched."""
     def init_fn(params):
         del params
         return optax.EmptyState()
 
     def update_fn(updates, state, params):
-        updates = jax.tree_util.tree_map(
-            lambda u, p, m: u + weight_decay * (p - m), updates, params, mu)
+        def decay(u, p, m):
+            if p.ndim != 2:
+                return u  # biases / LayerNorm params: no prior
+            return u + weight_decay * (p - m)
+        updates = jax.tree_util.tree_map(decay, updates, params, mu)
         return updates, state
 
     return optax.GradientTransformation(init_fn, update_fn)
