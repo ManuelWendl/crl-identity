@@ -59,7 +59,7 @@ use_all_batches: 0
 num_sgd_batches_per_training_step: 800
 eval_actor: 0
 expl_actor: 1
-entropy_param: 0.25
+entropy_param: 0.5
 disable_entropy: 0
 use_relu: 0
 num_render: 10
