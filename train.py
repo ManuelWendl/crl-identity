@@ -338,6 +338,7 @@ class Actor(nn.Module):
         proj_init = identity_kernel_init if self.use_identity_prior else lecun_unfirom
 
         #Initial layer
+        x = normalize(x)
         x = nn.Dense(self.network_width, kernel_init=proj_init, bias_init=bias_init)(x)
         # if not self.use_identity_prior:
         #     x = normalize(x)
