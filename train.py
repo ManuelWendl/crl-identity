@@ -257,7 +257,6 @@ class SA_encoder(nn.Module):
         for _ in range(self.network_depth // 4):
             x = block_fn(x, self.network_width, normalize, activation)
         #Final layer
-        x = nn.normalize(x)
         x = nn.Dense(64, kernel_init=proj_init, bias_init=bias_init)(x)
         return x
     
@@ -303,7 +302,6 @@ class G_encoder(nn.Module):
         for _ in range(self.network_depth // 4):
             x = block_fn(x, self.network_width, normalize, activation)
         #Final layer
-        x = normalize(x)
         x = nn.Dense(64, kernel_init=proj_init, bias_init=bias_init)(x)
         return x
   
@@ -351,7 +349,6 @@ class Actor(nn.Module):
         for _ in range(self.network_depth // 4):
             x = block_fn(x, self.network_width, normalize, activation)
         #Final layer
-        x = normalize(x)
         mean = nn.Dense(self.action_size, kernel_init=proj_init, bias_init=bias_init)(x)
         log_std = nn.Dense(self.action_size, kernel_init=proj_init, bias_init=bias_init)(x)
 
