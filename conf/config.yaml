@@ -18,9 +18,9 @@ vis_length: 1000
 checkpoint: true
 
 # Environment
-env_id: humanoid
+env_id: ant
 episode_length: 1000
-eval_env_id: "humanoid"
+eval_env_id: "ant"
 num_eval_envs: 128
 obs_dim: 0
 goal_start_idx: 0
