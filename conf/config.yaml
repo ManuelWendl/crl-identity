@@ -49,6 +49,7 @@ actor_skip_connections: 0
 critic_skip_connections: 0
 use_identity_prior: 0
 identity_weight_decay: 1e-5
+orthogonal_prior: 1  # 0=pull square kernels to I, 1=pull to any orthogonal W (||WᵀW-I||)
 sgd: false
 sgd_momentum: 0.9
 

@@ -82,6 +82,7 @@ class Args:
     critic_skip_connections: int = 0 # 0 for no skip connections, >= 0 means the frequency of skip connections (every N layers)
     use_identity_prior: int = 0  # 0=residual blocks, 1=identity-init MLP (no skip) + identity weight decay
     identity_weight_decay: float = 1e-4  # L2 weight decay coefficient for identity prior
+    orthogonal_prior: int = 0  # 0=pull square kernels to I (||W-I||), 1=pull to any orthogonal W (||WᵀW-I||)
     sgd: bool = False  # use SGD + cosine annealing (as in IdentityPrior) instead of Adam
     sgd_momentum: float = 0.9
     
@@ -128,16 +129,21 @@ def identity_kernel_init(key, shape, dtype=jnp.float32):
     return lecun_unfirom(key, shape, dtype)
 
 
-def identity_reg_loss(params, weight_decay):
-    """Gaussian prior loss: 0.5 * wd * ||θ - μ||^2 summed over weight matrices only.
-    Square 2-D kernels use μ=I; non-square 2-D kernels use μ=0. 1-D params
-    (biases, LayerNorm scale/bias) are excluded from the prior entirely."""
+def identity_reg_loss(params, weight_decay, orthogonal=False):
+    """Prior loss: 0.5 * wd * ||·||^2 summed over weight matrices only.
+    Square 2-D kernels are pulled to the identity (||W - I||^2) by default, or — when
+    `orthogonal` is set — to the orthogonal manifold via the Gram penalty ||WᵀW - I||^2,
+    which is minimized by *any* orthogonal W rather than only by W=I. Non-square 2-D
+    kernels use μ=0 (||W||^2). 1-D params (biases, LayerNorm scale/bias) are excluded."""
     total = jnp.zeros(())
     for leaf in jax.tree_util.tree_leaves(params):
         if leaf.ndim != 2:
             continue  # biases / LayerNorm params: no prior
         if leaf.shape[0] == leaf.shape[1]:
-            diff = leaf - jnp.eye(leaf.shape[0])
+            if orthogonal:
+                diff = leaf.T @ leaf - jnp.eye(leaf.shape[0])
+            else:
+                diff = leaf - jnp.eye(leaf.shape[0])
             total = total + jnp.sum(diff ** 2)
         else:
             total = total + jnp.sum(leaf ** 2)
@@ -168,6 +174,30 @@ def add_identity_decayed_weights(weight_decay, mu):
                 return u  # biases / LayerNorm params: no prior
             return u + weight_decay * (p - m)
         updates = jax.tree_util.tree_map(decay, updates, params, mu)
+        return updates, state
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
+def add_orthogonal_decayed_weights(weight_decay):
+    """Decoupled (AdamW-style) decay toward the orthogonal manifold for square 2-D kernels:
+    adds the gradient of 0.5 * wd * ||WᵀW - I||^2, namely 2 * wd * W (WᵀW - I), directly to
+    the update so it bypasses Adam's m / v (mirroring add_identity_decayed_weights). Unlike
+    the identity prior this is minimized by any orthogonal W, not only W=I. Non-square 2-D
+    kernels decay toward 0 (wd * W); 1-D params (biases, LayerNorm) are left untouched."""
+    def init_fn(params):
+        del params
+        return optax.EmptyState()
+
+    def update_fn(updates, state, params):
+        def decay(u, p):
+            if p.ndim != 2:
+                return u  # biases / LayerNorm params: no prior
+            if p.shape[0] == p.shape[1]:
+                grad = 2.0 * p @ (p.T @ p - jnp.eye(p.shape[0], dtype=p.dtype))
+                return u + weight_decay * grad
+            return u + weight_decay * p  # non-square: decay toward 0
+        updates = jax.tree_util.tree_map(decay, updates, params)
         return updates, state
 
     return optax.GradientTransformation(init_fn, update_fn)
@@ -667,9 +697,13 @@ def main(cfg: DictConfig):
         actor_tx = optax.sgd(learning_rate=actor_schedule, momentum=args.sgd_momentum)
     elif args.use_identity_prior:
         # Decoupled (AdamW-style) identity prior: wd * (θ - μ) bypasses Adam's m / v.
+        if args.orthogonal_prior:
+            actor_decay = add_orthogonal_decayed_weights(args.identity_weight_decay)
+        else:
+            actor_decay = add_identity_decayed_weights(args.identity_weight_decay, make_identity_mu(actor_params))
         actor_tx = optax.chain(
             optax.scale_by_adam(),
-            add_identity_decayed_weights(args.identity_weight_decay, make_identity_mu(actor_params)),
+            actor_decay,
             optax.scale_by_learning_rate(args.actor_lr),
         )
     else:
@@ -695,9 +729,13 @@ def main(cfg: DictConfig):
         critic_tx = optax.sgd(learning_rate=critic_schedule, momentum=args.sgd_momentum)
     elif args.use_identity_prior:
         # Decoupled (AdamW-style) identity prior: wd * (θ - μ) bypasses Adam's m / v.
+        if args.orthogonal_prior:
+            critic_decay = add_orthogonal_decayed_weights(args.identity_weight_decay)
+        else:
+            critic_decay = add_identity_decayed_weights(args.identity_weight_decay, make_identity_mu(critic_params))
         critic_tx = optax.chain(
             optax.scale_by_adam(),
-            add_identity_decayed_weights(args.identity_weight_decay, make_identity_mu(critic_params)),
+            critic_decay,
             optax.scale_by_learning_rate(args.critic_lr),
         )
     else:
@@ -917,7 +955,7 @@ def main(cfg: DictConfig):
             # SGD: prior is applied as a loss term. Adam: prior is applied as decoupled
             # (AdamW-style) weight decay in the optimizer, so skip the loss term here.
             if args.use_identity_prior and args.sgd:
-                actor_loss = actor_loss + identity_reg_loss(actor_params, args.identity_weight_decay)
+                actor_loss = actor_loss + identity_reg_loss(actor_params, args.identity_weight_decay, orthogonal=bool(args.orthogonal_prior))
 
             return actor_loss, log_prob
 
@@ -973,7 +1011,7 @@ def main(cfg: DictConfig):
             # SGD: prior is applied as a loss term. Adam: prior is applied as decoupled
             # (AdamW-style) weight decay in the optimizer, so skip the loss term here.
             if args.use_identity_prior and args.sgd:
-                critic_loss = critic_loss + identity_reg_loss(critic_params, args.identity_weight_decay)
+                critic_loss = critic_loss + identity_reg_loss(critic_params, args.identity_weight_decay, orthogonal=bool(args.orthogonal_prior))
 
             I, correct, logits_pos, logits_neg = jnp.zeros(1), jnp.zeros(1), jnp.zeros(1), jnp.zeros(1)
 
